@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>Box Box</title>
+        <style>
+            :root {
+                color-scheme: light dark;
+                --bg-color: #f7f7f8;
+                --text-color: #1f2933;
+                --border-color: #d5d7dc;
+                --muted-text: #6b7280;
+                --primary-color: #0ea5e9;
+                --danger-color: #e53e3e;
+                --body-width: 304px;
+            }
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --bg-color: #1e1f25;
+                    --text-color: #edf2f7;
+                    --border-color: #2f3240;
+                    --muted-text: #9aa0b5;
+                }
+            }
+            body {
+                margin: 0;
+                width: var(--body-width);
+                font-family: system-ui, -apple-system, Segoe UI, Roboto,
+                    "Noto Sans", sans-serif;
+                background-color: var(--bg-color);
+                color: var(--text-color);
+            }
+            .container {
+                padding: 12px;
+            }
+            header {
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .logo {
+                width: 28px;
+                height: 28px;
+            }
+            h1 {
+                font-size: 18px;
+                margin: 0;
+            }
+            .action-bar {
+                display: flex;
+                gap: 6px;
+                margin-bottom: 10px;
+            }
+            .action-bar .btn {
+                flex: 1;
+            }
+            .btn {
+                border: none;
+                border-radius: 6px;
+                font-size: 11px;
+                padding: 8px 10px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: opacity 0.15s ease;
+            }
+            .btn:disabled {
+                opacity: 0.4;
+                cursor: not-allowed;
+            }
+            .btn-primary {
+                background-color: var(--primary-color);
+                color: #fff;
+            }
+            .btn-muted {
+                background-color: rgba(15, 23, 42, 0.08);
+                color: var(--text-color);
+            }
+            .btn-danger {
+                background-color: var(--danger-color);
+                color: #fff;
+            }
+            .section-title {
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--muted-text);
+                margin: 10px 0 6px;
+            }
+            .session-list {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+            .session-card {
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                padding: 8px 10px;
+                background: rgba(255, 255, 255, 0.6);
+                transition: border-color 0.2s ease, background-color 0.2s ease;
+            }
+            .session-card.current-tab {
+                border-color: var(--primary-color);
+                background: rgba(14, 165, 233, 0.08);
+            }
+            @media (prefers-color-scheme: dark) {
+                .session-card {
+                    background: rgba(15, 17, 25, 0.65);
+                }
+            }
+            .session-card__header {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .session-card__title {
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;
+                flex: 1;
+            }
+            .session-card__name {
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--text-color);
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .session-card__actions {
+                display: flex;
+                gap: 6px;
+                align-items: center;
+                flex-wrap: nowrap;
+                justify-content: flex-end;
+                margin-left: auto;
+            }
+            .session-card__actions input[type="color"] {
+                width: 24px;
+                height: 24px;
+                border: 1px solid var(--border-color);
+                border-radius: 6px;
+                padding: 0;
+                background: transparent;
+                cursor: pointer;
+                margin-right: -4px;
+            }
+            .session-card__name {
+                margin-right: auto;
+            }
+            .session-card__body {
+                margin-top: 6px;
+            }
+            .overlay-chips {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            .chip {
+                border: 1px solid var(--danger-color);
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 10px;
+                background: rgba(229, 62, 62, 0.08);
+                cursor: pointer;
+                color: var(--danger-color);
+            }
+            .empty-state {
+                font-size: 11px;
+                color: var(--muted-text);
+                text-align: center;
+                padding: 8px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <img src="icons/icon128.png" class="logo" alt="Box Box logo" />
+                <h1>Box Box</h1>
+            </header>
+            <div id="sessionManager"></div>
+        </div>
+
+        <!-- Hidden default color input to keep legacy JS stable; UI uses per-session pickers -->
+        <input
+            id="shadowColor"
+            type="color"
+            value="#000000"
+            style="display: none"
+        />
+
+        <script src="popup.js"></script>
+    </body>
+</html>

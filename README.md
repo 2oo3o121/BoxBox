@@ -1,2 +1,3 @@
-# boxbox
-Mirroring Box Chrome Extension
+# Box Box
+
+_Mirroring Box Chrome Extension_

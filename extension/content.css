@@ -1,0 +1,230 @@
+:host {
+    all: initial;
+    --handle-hit: 10px;
+
+    --border-width: 0px;
+    --shadow-color: var(--accent, #000000);
+    --border-color: var(--shadow-color);
+
+    --panel-bg: rgba(255, 255, 255, 0.1);
+    --shadow: none;
+    --text-color: #222;
+    --radius: 2px;
+}
+@media (prefers-color-scheme: dark) {
+    :host {
+        --shadow-color: var(--accent, #ffffff);
+        --border-color: var(--shadow-color);
+    }
+}
+
+:host([data-kind="output"]) {
+    --panel-bg: rgba(0, 0, 0, 0.1);
+}
+
+.wrap {
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+        "Noto Sans", sans-serif;
+    color: var(--text-color);
+    width: 100%;
+    height: 100%;
+    display: flex;
+}
+
+.panel {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: var(--panel-bg);
+    border: var(--border-width) solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    box-sizing: border-box;
+
+    contain: layout size;
+    isolation: isolate;
+    cursor: grab;
+}
+
+.wrap.toolbar-visible .panel {
+    box-shadow: var(--shadow), 0 0 0 2px var(--shadow-color);
+}
+.panel:active {
+    cursor: grabbing;
+}
+
+.content {
+    position: absolute;
+    inset: 0;
+    display: block;
+}
+
+.wrap .toolbar {
+    position: absolute;
+    top: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 3;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+}
+.wrap.toolbar-bottom .toolbar {
+    top: auto;
+    bottom: -24px;
+}
+.wrap.toolbar-visible .toolbar {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.wrap.fix-through .panel {
+    pointer-events: none;
+    cursor: default;
+}
+.wrap.fix-through .resize-br,
+.wrap.fix-through .resize-bl,
+.wrap.fix-through .resize-tr,
+.wrap.fix-through .resize-tl {
+    pointer-events: none;
+}
+
+.wrap .tool-btn {
+    width: 16px;
+    height: 16px;
+    border-radius: 2px;
+    background: transparent;
+    position: relative;
+    box-shadow: 0 0 0 2px var(--shadow-color);
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 16px;
+    color: var(--shadow-color);
+    text-shadow: none;
+}
+.wrap .tool-btn[data-icon] {
+    color: transparent;
+}
+.wrap .tool-btn[data-icon]::before {
+    content: attr(data-icon);
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) translateY(var(--icon-offset-y, 0px))
+        scaleX(var(--icon-scale-x, 1));
+    font-size: var(--icon-size, 11px);
+    font-weight: var(--icon-weight, 600);
+    line-height: 1;
+    color: var(--shadow-color);
+}
+.wrap .tool-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.resize-br,
+.resize-bl {
+    position: absolute;
+    bottom: 0;
+    width: calc(16px + var(--handle-hit));
+    height: calc(16px + var(--handle-hit));
+    z-index: 2;
+}
+.resize-tr,
+.resize-tl {
+    position: absolute;
+    top: 0;
+    width: calc(16px + var(--handle-hit));
+    height: calc(16px + var(--handle-hit));
+    z-index: 2;
+}
+.resize-br {
+    right: 0;
+    cursor: nwse-resize;
+}
+.resize-bl {
+    left: 0;
+    cursor: nesw-resize;
+}
+.resize-tr {
+    right: 0;
+    cursor: nesw-resize;
+}
+.resize-tl {
+    left: 0;
+    cursor: nwse-resize;
+}
+
+.resize-br:hover::after,
+.resize-bl:hover::after,
+.resize-tr:hover::after,
+.resize-tl:hover::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border-radius: 50%;
+    background: radial-gradient(
+        circle,
+        rgba(255, 255, 255, 0.22),
+        rgba(255, 255, 255, 0) 70%
+    );
+    pointer-events: none;
+}
+
+.media-host {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: transparent;
+}
+.media-fit {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+}
+.media-host .media-img,
+.media-host .media-video,
+.media-host canvas {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    user-select: none;
+    background: transparent;
+}
+.media-host .media-video {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.__peek_media_host {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    overflow: hidden;
+}
+
+.__peek_media_video {
+    position: absolute;
+    max-width: none;
+    max-height: none;
+    transform-origin: top left;
+    pointer-events: none;
+}
+
+.__peek_media_canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
