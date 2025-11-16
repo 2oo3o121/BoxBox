@@ -17,10 +17,12 @@ TODO: Planned for Chrome Web Store release soon
 
 ## Usage
 
+0. You can always check all the mirroring sessions by clicking the extension icon (extension popup).
 1. Add a new capture box with **Ctrl+Shift+8** or via the extension icon.
 2. Adjust the size and position (or the color) of the capture box as needed.
     - Change the position by dragging the box.
     - Adjust the size by dragging the four corners of the box.
+    - Change the color at the extension popup.
 3. Add an output box for the recently created capture box with **Ctrl+Shift+9** or via the extension icon.
 4. Anything in the capture box will be mirrored in the output box in real-time.
 
