@@ -892,6 +892,11 @@ function stopRenderLoop(sessionId) {
             clearInterval(handle.interval);
         } catch {}
     }
+    if (handle?.timeout) {
+        try {
+            clearTimeout(handle.timeout);
+        } catch {}
+    }
     const video = handle?.video || videoElements.get(sessionId);
     if (handle?.rvfc && video?.cancelVideoFrameCallback) {
         try {
@@ -981,19 +986,30 @@ function startRenderLoop(sessionId) {
 
     drawOnce();
     const handles = { interval: 0, rvfc: 0, video };
+    const startInterval = () => {
+        if (handles.interval) return;
+        handles.interval = setInterval(drawOnce, 33);
+    };
+    startInterval();
     if (typeof video.requestVideoFrameCallback === "function") {
         const step = () => {
             drawOnce();
+            if (handles.interval) {
+                try {
+                    clearInterval(handles.interval);
+                } catch {}
+                handles.interval = 0;
+                console.log(
+                    "[OFFSCREEN] Switched render loop to requestVideoFrameCallback",
+                );
+            }
             handles.rvfc = video.requestVideoFrameCallback(step);
         };
         handles.rvfc = video.requestVideoFrameCallback(step);
-        animationFrameIds.set(sessionId, handles);
-        console.log("[OFFSCREEN] Using requestVideoFrameCallback loop");
     } else {
-        handles.interval = setInterval(drawOnce, 33);
-        animationFrameIds.set(sessionId, handles);
-        console.log("[OFFSCREEN] Using setInterval loop @30fps (legacy)");
+        console.log("[OFFSCREEN] Falling back to setInterval render loop");
     }
+    animationFrameIds.set(sessionId, handles);
 
     setTimeout(() => {
         if (frameCount === 0) {
@@ -1068,12 +1084,30 @@ function stopCapture(sessionId) {
 
     stopRenderLoop(sessionId);
 
+    const ctx = canvasContexts.get(sessionId);
+    const canvas = ctx?.canvas;
+    if (canvas) {
+        try {
+            canvas.width = 0;
+            canvas.height = 0;
+            canvas.remove();
+        } catch {}
+    }
+    canvasContexts.delete(sessionId);
+
+    const canvasStream = canvasStreams.get(sessionId);
+    if (canvasStream) {
+        try {
+            canvasStream.getTracks()?.forEach((t) => stopTrack(t));
+        } catch {}
+        canvasStreams.delete(sessionId);
+    }
+
     [
         peerConnections,
         pendingOffers,
         pendingOutputIce,
         videoElements,
-        canvasContexts,
         cropGeometries,
         animationFrameIds,
         srcDims,
@@ -1086,13 +1120,6 @@ function stopCapture(sessionId) {
         if (shouldStopBase) originalStreams.delete(sessionId);
     } catch {}
 
-    const canvasStream = canvasStreams.get(sessionId);
-    if (canvasStream) {
-        try {
-            canvasStream.getTracks()?.forEach((t) => stopTrack(t));
-        } catch {}
-        canvasStreams.delete(sessionId);
-    }
     activeOutputTabs.delete(sessionId);
 }
 
