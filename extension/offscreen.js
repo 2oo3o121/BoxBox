@@ -10,7 +10,7 @@ const scaledRegions = new Map(); // sessionId -> effective cropped region after 
 const videoElements = new Map(); // sessionId -> HTMLVideoElement mirroring capture
 const canvasContexts = new Map(); // sessionId -> CanvasRenderingContext2D for crop preview
 const cropGeometries = new Map(); // sessionId -> most recent crop payload from source
-const animationFrameIds = new Map(); // sessionId -> RAF id for drawing loops
+const animationFrameIds = new Map(); // sessionId -> render loop handles
 const originalStreams = new Map(); // sessionId -> original tabCapture MediaStream
 const pendingCropPayload = new Map(); // sessionId -> crop payload queued while stream boots
 const currentOfferId = new Map(); // sessionId -> latest offer identifier
@@ -886,13 +886,18 @@ async function setupPeerConnectionForOutput(sessionId, tabId) {
 
 function stopRenderLoop(sessionId) {
     if (!animationFrameIds.has(sessionId)) return;
-    const id = animationFrameIds.get(sessionId);
-    try {
-        clearInterval(id);
-    } catch {}
-    try {
-        cancelAnimationFrame(id);
-    } catch {}
+    const handle = animationFrameIds.get(sessionId);
+    if (handle?.interval) {
+        try {
+            clearInterval(handle.interval);
+        } catch {}
+    }
+    const video = handle?.video || videoElements.get(sessionId);
+    if (handle?.rvfc && video?.cancelVideoFrameCallback) {
+        try {
+            video.cancelVideoFrameCallback(handle.rvfc);
+        } catch {}
+    }
     animationFrameIds.delete(sessionId);
     console.log(`[OFFSCREEN] Render loop stopped for session: ${sessionId}`);
 }
@@ -975,9 +980,20 @@ function startRenderLoop(sessionId) {
     };
 
     drawOnce();
-    const id = setInterval(drawOnce, 33);
-    animationFrameIds.set(sessionId, id);
-    console.log("[OFFSCREEN] Using setInterval loop @30fps (forced)");
+    const handles = { interval: 0, rvfc: 0, video };
+    if (typeof video.requestVideoFrameCallback === "function") {
+        const step = () => {
+            drawOnce();
+            handles.rvfc = video.requestVideoFrameCallback(step);
+        };
+        handles.rvfc = video.requestVideoFrameCallback(step);
+        animationFrameIds.set(sessionId, handles);
+        console.log("[OFFSCREEN] Using requestVideoFrameCallback loop");
+    } else {
+        handles.interval = setInterval(drawOnce, 33);
+        animationFrameIds.set(sessionId, handles);
+        console.log("[OFFSCREEN] Using setInterval loop @30fps (legacy)");
+    }
 
     setTimeout(() => {
         if (frameCount === 0) {
