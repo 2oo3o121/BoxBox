@@ -28,6 +28,37 @@ function keyFor(sessionId, tabId) {
     return `${sessionId}:${tabId}`;
 }
 
+const DETAIL_CONTENT_HINT = "detail";
+const DEFAULT_MAX_BITRATE = 4_000_000;
+
+function setDetailHintForTrack(track) {
+    if (!track) return;
+    try {
+        track.contentHint = DETAIL_CONTENT_HINT;
+    } catch {}
+}
+
+function boostSenderForHighQuality(sender, maxBitrate = DEFAULT_MAX_BITRATE) {
+    if (!sender || typeof sender.getParameters !== "function") return;
+    try {
+        const params = sender.getParameters() || {};
+        if (!params.encodings || params.encodings.length === 0) {
+            params.encodings = [{}];
+        }
+        params.degradationPreference = "maintain-resolution";
+        const enc = params.encodings[0];
+        if (typeof enc.maxBitrate !== "number" || enc.maxBitrate < maxBitrate) {
+            enc.maxBitrate = maxBitrate;
+        }
+        enc.priority = "high";
+        if ("networkPriority" in enc) enc.networkPriority = "high";
+        const result = sender.setParameters(params);
+        if (result && typeof result.catch === "function") {
+            result.catch(() => {});
+        }
+    } catch {}
+}
+
 // Primary dispatcher for capture and signaling messages.
 chrome.runtime.onMessage.addListener((msg) => {
     if (msg.target !== "offscreen") return;
@@ -490,6 +521,7 @@ async function startCapture(sessionId, streamId, tabId) {
         console.log("[OFFSCREEN] Step 2: Stream acquired successfully.");
 
         const [videoTrack] = stream.getVideoTracks();
+        setDetailHintForTrack(videoTrack);
         const settings = videoTrack.getSettings();
 
         console.log("[OFFSCREEN] Step 3: Creating <video> element.");
@@ -545,6 +577,7 @@ async function startCapture(sessionId, streamId, tabId) {
 
         console.log("[OFFSCREEN] Step 5: Calling canvas.captureStream()...");
         const croppedStream = canvas.captureStream(30);
+        setDetailHintForTrack(croppedStream.getVideoTracks?.()[0]);
         console.log(
             "[OFFSCREEN] canvas track state:",
             croppedStream.getVideoTracks()?.[0]?.readyState,
@@ -640,6 +673,7 @@ async function setupPeerConnection(sessionId) {
         return;
     }
     const croppedStream = canvas.captureStream(30);
+    setDetailHintForTrack(croppedStream.getVideoTracks?.()[0]);
 
     const video = videoElements.get(sessionId);
     const settings = video?.srcObject?.getVideoTracks()?.[0]?.getSettings();
@@ -658,9 +692,10 @@ async function setupPeerConnection(sessionId) {
     });
     peerConnections.set(sessionId, pc);
 
-    croppedStream
-        .getTracks()
-        .forEach((track) => pc.addTrack(track, croppedStream));
+    croppedStream.getTracks().forEach((track) => {
+        const sender = pc.addTrack(track, croppedStream);
+        boostSenderForHighQuality(sender);
+    });
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
@@ -722,9 +757,10 @@ async function setupPeerConnectionForOutput(sessionId, tabId) {
     const key = keyFor(sessionId, tabId);
     pcByOutput.set(key, pc);
 
-    croppedStream
-        .getTracks()
-        .forEach((track) => pc.addTrack(track, croppedStream));
+    croppedStream.getTracks().forEach((track) => {
+        const sender = pc.addTrack(track, croppedStream);
+        boostSenderForHighQuality(sender);
+    });
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
