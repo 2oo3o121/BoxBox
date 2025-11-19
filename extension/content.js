@@ -596,15 +596,60 @@
                             })
                             .catch(() => {});
                     } catch {}
-                    console.log(
-                        "[CONTENT] Condition met. Setting onGeomChanged callback...",
-                    );
                     if (ov.root) ov.root.dataset.peekSessionId = sessionId;
-                    const sendCrop = () => {
+                    const cropScheduler =
+                        ov.__cropScheduler ||
+                        (() => {
+                            const state = {
+                                frame: 0,
+                                pending: null,
+                                lastSent: null,
+                            };
+                            const flush = () => {
+                                state.frame = 0;
+                                const next = state.pending;
+                                if (!next) return;
+                                state.pending = null;
+                                const prev = state.lastSent;
+                                const same =
+                                    prev &&
+                                    prev.x === next.geom.x &&
+                                    prev.y === next.geom.y &&
+                                    prev.width === next.geom.width &&
+                                    prev.height === next.geom.height;
+                                if (same) return;
+                                state.lastSent = next.geom;
+                                chrome.runtime
+                                    .sendMessage({
+                                        type: "UPDATE_CROP_GEOMETRY",
+                                        payload: next,
+                                    })
+                                    .catch(() => {});
+                            };
+                            const request = () => {
+                                if (state.frame) return;
+                                state.frame = requestAnimationFrame(flush);
+                            };
+                            return {
+                                queue(geomPayload) {
+                                    state.pending = geomPayload;
+                                    request();
+                                },
+                                flushNow() {
+                                    if (state.frame) {
+                                        cancelAnimationFrame(state.frame);
+                                        state.frame = 0;
+                                    }
+                                    flush();
+                                },
+                            };
+                        })();
+                    ov.__cropScheduler = cropScheduler;
+                    const computeCropPayload = () => {
                         const host = ov.root;
+                        if (!host) return null;
                         const r = host.getBoundingClientRect();
                         const vv = window.visualViewport;
-                        const docEl = document.documentElement;
                         const layoutX = r.left + (vv ? vv.offsetLeft : 0);
                         const layoutY = r.top + (vv ? vv.offsetTop : 0);
                         const layoutW = r.width;
@@ -612,8 +657,7 @@
                         const vpW = Math.max(1, window.innerWidth || 0);
                         const vpH = Math.max(1, window.innerHeight || 0);
                         const dpr = window.devicePixelRatio || 1;
-
-                        const payload = {
+                        return {
                             sessionId,
                             geom: {
                                 x: layoutX,
@@ -625,23 +669,15 @@
                             viewportHeight: vpH,
                             dpr,
                         };
-                        console.log(
-                            "[CONTENT] Geometry changed (source, geom):",
-                            {
-                                sessionId,
-                                geom: payload.geom,
-                            },
-                        );
-                        chrome.runtime
-                            .sendMessage({
-                                type: "UPDATE_CROP_GEOMETRY",
-                                payload,
-                            })
-                            .catch(() => {});
+                    };
+                    const enqueueCropUpdate = () => {
+                        const payload = computeCropPayload();
+                        if (!payload) return;
+                        cropScheduler.queue(payload);
                     };
                     if (!ov.__peekScrollBinded) {
                         ov.__peekScrollBinded = true;
-                        const onScrollOrResize = () => sendCrop();
+                        const onScrollOrResize = () => enqueueCropUpdate();
                         const vv = window.visualViewport;
                         window.addEventListener("scroll", onScrollOrResize, {
                             passive: true,
@@ -655,11 +691,11 @@
                         }
                         ov.onGeomChanged = (geom) => {
                             scheduleGeomSave(overlayId, geom || ov.getGeom());
-                            sendCrop();
+                            enqueueCropUpdate();
                         };
                     }
 
-                    sendCrop();
+                    enqueueCropUpdate();
                     try {
                         chrome.runtime
                             .sendMessage({
