@@ -30,6 +30,8 @@ function keyFor(sessionId, tabId) {
 
 const DETAIL_CONTENT_HINT = "detail";
 const DEFAULT_MAX_BITRATE = 4_000_000;
+const LEGACY_OUTPUT_KEY = "__legacy__";
+const activeOutputTabs = new Map(); // sessionId -> Set of tab keys consuming frames
 
 function setDetailHintForTrack(track) {
     if (!track) return;
@@ -59,6 +61,35 @@ function boostSenderForHighQuality(sender, maxBitrate = DEFAULT_MAX_BITRATE) {
     } catch {}
 }
 
+function normalizeOutputKey(tabId) {
+    return tabId == null ? LEGACY_OUTPUT_KEY : String(tabId);
+}
+
+function markOutputActive(sessionId, tabId) {
+    if (!sessionId) return;
+    const key = normalizeOutputKey(tabId);
+    let tabs = activeOutputTabs.get(sessionId);
+    if (!tabs) {
+        tabs = new Set();
+        activeOutputTabs.set(sessionId, tabs);
+    }
+    if (tabs.has(key)) return;
+    tabs.add(key);
+    startRenderLoop(sessionId);
+}
+
+function markOutputInactive(sessionId, tabId) {
+    if (!sessionId) return;
+    const tabs = activeOutputTabs.get(sessionId);
+    if (!tabs) return;
+    const key = normalizeOutputKey(tabId);
+    if (!tabs.delete(key)) return;
+    if (tabs.size === 0) {
+        activeOutputTabs.delete(sessionId);
+        stopRenderLoop(sessionId);
+    }
+}
+
 // Primary dispatcher for capture and signaling messages.
 chrome.runtime.onMessage.addListener((msg) => {
     if (msg.target !== "offscreen") return;
@@ -84,6 +115,7 @@ chrome.runtime.onMessage.addListener((msg) => {
         }
 
         case "new-output-added":
+            markOutputActive(sessionId, msg.tabId);
             if (msg.tabId) {
                 const tabId = msg.tabId;
                 console.log(
@@ -793,7 +825,25 @@ async function setupPeerConnectionForOutput(sessionId, tabId) {
     offerByOutput.set(key, offerPayload);
 }
 
+function stopRenderLoop(sessionId) {
+    if (!animationFrameIds.has(sessionId)) return;
+    const id = animationFrameIds.get(sessionId);
+    try {
+        clearInterval(id);
+    } catch {}
+    try {
+        cancelAnimationFrame(id);
+    } catch {}
+    animationFrameIds.delete(sessionId);
+    console.log(`[OFFSCREEN] Render loop stopped for session: ${sessionId}`);
+}
+
 function startRenderLoop(sessionId) {
+    if (animationFrameIds.has(sessionId)) return;
+    const tabs = activeOutputTabs.get(sessionId);
+    if (!tabs || tabs.size === 0) {
+        return;
+    }
     const video = videoElements.get(sessionId);
     const ctx = canvasContexts.get(sessionId);
 
@@ -810,13 +860,6 @@ function startRenderLoop(sessionId) {
     const canvas = ctx.canvas;
     let firstDrawLogged = false;
     let frameCount = 0;
-
-    if (animationFrameIds.has(sessionId)) {
-        const prev = animationFrameIds.get(sessionId);
-        try {
-            clearInterval(prev);
-        } catch {}
-    }
 
     const drawOnce = () => {
         const vw = video.videoWidth || 0;
@@ -943,15 +986,7 @@ function stopCapture(sessionId) {
         } catch {}
     }
 
-    if (animationFrameIds.has(sessionId)) {
-        const id = animationFrameIds.get(sessionId);
-        try {
-            clearInterval(id);
-        } catch {}
-        try {
-            cancelAnimationFrame(id);
-        } catch {}
-    }
+    stopRenderLoop(sessionId);
 
     [
         peerConnections,
@@ -970,6 +1005,8 @@ function stopCapture(sessionId) {
     try {
         if (shouldStopBase) originalStreams.delete(sessionId);
     } catch {}
+
+    activeOutputTabs.delete(sessionId);
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
@@ -985,4 +1022,5 @@ chrome.runtime.onMessage.addListener((msg) => {
     offerByOutput.delete(k);
     pendingIceByOutput.delete(k);
     offerIdByOutput.delete(k);
+    markOutputInactive(sessionId, tabId);
 });
