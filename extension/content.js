@@ -393,6 +393,15 @@
 
             ov.root.dataset.peekSessionId = sessionId;
 
+            if (sessionId) {
+                chrome.runtime
+                    .sendMessage({
+                        type: "REQUEST_CROP_AR",
+                        payload: { sessionId },
+                    })
+                    .catch(() => {});
+            }
+
             let suppressPausePersist = false;
             ov.onPauseChanged = (state) => {
                 if (suppressPausePersist) return;
