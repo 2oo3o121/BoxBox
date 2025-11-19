@@ -10,7 +10,7 @@ const scaledRegions = new Map(); // sessionId -> effective cropped region after 
 const videoElements = new Map(); // sessionId -> HTMLVideoElement mirroring capture
 const canvasContexts = new Map(); // sessionId -> CanvasRenderingContext2D for crop preview
 const cropGeometries = new Map(); // sessionId -> most recent crop payload from source
-const animationFrameIds = new Map(); // sessionId -> RAF id for drawing loops
+const animationFrameIds = new Map(); // sessionId -> render loop handles
 const originalStreams = new Map(); // sessionId -> original tabCapture MediaStream
 const pendingCropPayload = new Map(); // sessionId -> crop payload queued while stream boots
 const currentOfferId = new Map(); // sessionId -> latest offer identifier
@@ -26,6 +26,122 @@ const pendingIceByOutput = new Map(); // sessionTabKey -> queued ICE for outputs
 const offerIdByOutput = new Map(); // sessionTabKey -> last offer id acknowledged
 function keyFor(sessionId, tabId) {
     return `${sessionId}:${tabId}`;
+}
+
+const DETAIL_CONTENT_HINT = "detail";
+const DEFAULT_MAX_BITRATE = 4_000_000;
+const LEGACY_OUTPUT_KEY = "__legacy__";
+const activeOutputTabs = new Map(); // sessionId -> Set of tab keys consuming frames
+const canvasStreams = new Map(); // sessionId -> MediaStream from canvas.captureStream
+const sessionSenderTracks = new Map(); // sessionId -> track feeding session-level PC
+const outputSenderTracks = new Map(); // sessionTabKey -> track feeding per-output PC
+
+function setDetailHintForTrack(track) {
+    if (!track) return;
+    try {
+        track.contentHint = DETAIL_CONTENT_HINT;
+    } catch {}
+}
+
+function boostSenderForHighQuality(sender, maxBitrate = DEFAULT_MAX_BITRATE) {
+    if (!sender || typeof sender.getParameters !== "function") return;
+    try {
+        const params = sender.getParameters() || {};
+        if (!params.encodings || params.encodings.length === 0) {
+            params.encodings = [{}];
+        }
+        params.degradationPreference = "maintain-resolution";
+        const enc = params.encodings[0];
+        if (typeof enc.maxBitrate !== "number" || enc.maxBitrate < maxBitrate) {
+            enc.maxBitrate = maxBitrate;
+        }
+        enc.priority = "high";
+        if ("networkPriority" in enc) enc.networkPriority = "high";
+        const result = sender.setParameters(params);
+        if (result && typeof result.catch === "function") {
+            result.catch(() => {});
+        }
+    } catch {}
+}
+
+function stopTrack(track) {
+    if (!track) return;
+    try {
+        track.stop();
+    } catch {}
+}
+
+function initCanvasStream(sessionId) {
+    const canvas = canvasContexts.get(sessionId)?.canvas;
+    if (!canvas) return null;
+    const stream = canvas.captureStream(30);
+    setDetailHintForTrack(stream.getVideoTracks?.()[0]);
+    canvasStreams.set(sessionId, stream);
+    return stream;
+}
+
+function getCanvasStream(sessionId) {
+    let stream = canvasStreams.get(sessionId);
+    const track = stream?.getVideoTracks?.()[0];
+    if (!stream || !track || track.readyState === "ended") {
+        stream = initCanvasStream(sessionId);
+    }
+    return stream;
+}
+
+function createCanvasTrackClone(sessionId) {
+    const stream = getCanvasStream(sessionId);
+    const baseTrack = stream?.getVideoTracks?.()[0];
+    if (!baseTrack) return null;
+    const clone = baseTrack.clone();
+    setDetailHintForTrack(clone);
+    return clone;
+}
+
+function releaseSessionTrack(sessionId) {
+    const prev = sessionSenderTracks.get(sessionId);
+    if (prev) {
+        stopTrack(prev);
+        sessionSenderTracks.delete(sessionId);
+    }
+}
+
+function releaseOutputTrack(sessionId, tabId) {
+    const key = keyFor(sessionId, tabId);
+    const prev = outputSenderTracks.get(key);
+    if (prev) {
+        stopTrack(prev);
+        outputSenderTracks.delete(key);
+    }
+}
+
+function normalizeOutputKey(tabId) {
+    return tabId == null ? LEGACY_OUTPUT_KEY : String(tabId);
+}
+
+function markOutputActive(sessionId, tabId) {
+    if (!sessionId) return;
+    const key = normalizeOutputKey(tabId);
+    let tabs = activeOutputTabs.get(sessionId);
+    if (!tabs) {
+        tabs = new Set();
+        activeOutputTabs.set(sessionId, tabs);
+    }
+    if (tabs.has(key)) return;
+    tabs.add(key);
+    startRenderLoop(sessionId);
+}
+
+function markOutputInactive(sessionId, tabId) {
+    if (!sessionId) return;
+    const tabs = activeOutputTabs.get(sessionId);
+    if (!tabs) return;
+    const key = normalizeOutputKey(tabId);
+    if (!tabs.delete(key)) return;
+    if (tabs.size === 0) {
+        activeOutputTabs.delete(sessionId);
+        stopRenderLoop(sessionId);
+    }
 }
 
 // Primary dispatcher for capture and signaling messages.
@@ -53,6 +169,7 @@ chrome.runtime.onMessage.addListener((msg) => {
         }
 
         case "new-output-added":
+            markOutputActive(sessionId, msg.tabId);
             if (msg.tabId) {
                 const tabId = msg.tabId;
                 console.log(
@@ -490,6 +607,7 @@ async function startCapture(sessionId, streamId, tabId) {
         console.log("[OFFSCREEN] Step 2: Stream acquired successfully.");
 
         const [videoTrack] = stream.getVideoTracks();
+        setDetailHintForTrack(videoTrack);
         const settings = videoTrack.getSettings();
 
         console.log("[OFFSCREEN] Step 3: Creating <video> element.");
@@ -544,10 +662,10 @@ async function startCapture(sessionId, streamId, tabId) {
         canvasContexts.set(sessionId, ctx);
 
         console.log("[OFFSCREEN] Step 5: Calling canvas.captureStream()...");
-        const croppedStream = canvas.captureStream(30);
+        const canvasStream = initCanvasStream(sessionId);
         console.log(
             "[OFFSCREEN] canvas track state:",
-            croppedStream.getVideoTracks()?.[0]?.readyState,
+            canvasStream?.getVideoTracks?.()[0]?.readyState,
         );
         console.log("[OFFSCREEN] Step 6: Cropped stream created.");
 
@@ -607,6 +725,7 @@ function attachSessionToBase(tabId, sessionId) {
     });
     document.body.appendChild(canvas);
     canvasContexts.set(sessionId, ctx);
+    initCanvasStream(sessionId);
 
     setupPeerConnection(sessionId)
         .then(() => {
@@ -632,15 +751,6 @@ async function setupPeerConnection(sessionId) {
         peerConnections.get(sessionId).close();
     }
 
-    const canvas = canvasContexts.get(sessionId)?.canvas;
-    if (!canvas) {
-        console.error(
-            `[OFFSCREEN] Cannot setup PC for ${sessionId}: no canvas`,
-        );
-        return;
-    }
-    const croppedStream = canvas.captureStream(30);
-
     const video = videoElements.get(sessionId);
     const settings = video?.srcObject?.getVideoTracks()?.[0]?.getSettings();
     if (!video || !settings) {
@@ -658,9 +768,22 @@ async function setupPeerConnection(sessionId) {
     });
     peerConnections.set(sessionId, pc);
 
-    croppedStream
-        .getTracks()
-        .forEach((track) => pc.addTrack(track, croppedStream));
+    releaseSessionTrack(sessionId);
+    const track = createCanvasTrackClone(sessionId);
+    if (!track) {
+        console.error(
+            `[OFFSCREEN] Cannot setup PC for ${sessionId}: failed to clone canvas track`,
+        );
+        peerConnections.delete(sessionId);
+        try {
+            pc.close();
+        } catch {}
+        return;
+    }
+    const outStream = new MediaStream([track]);
+    const sender = pc.addTrack(track, outStream);
+    boostSenderForHighQuality(sender);
+    sessionSenderTracks.set(sessionId, track);
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
@@ -695,15 +818,6 @@ async function setupPeerConnection(sessionId) {
 
 // Builds a peer connection for a specific output tab.
 async function setupPeerConnectionForOutput(sessionId, tabId) {
-    const canvas = canvasContexts.get(sessionId)?.canvas;
-    if (!canvas) {
-        console.error(
-            `[OFFSCREEN] Cannot setup per-output PC for ${sessionId}/${tabId}: no canvas`,
-        );
-        return;
-    }
-    const croppedStream = canvas.captureStream(30);
-
     const video = videoElements.get(sessionId);
     const settings = video?.srcObject?.getVideoTracks()?.[0]?.getSettings();
     if (!video || !settings) {
@@ -722,9 +836,22 @@ async function setupPeerConnectionForOutput(sessionId, tabId) {
     const key = keyFor(sessionId, tabId);
     pcByOutput.set(key, pc);
 
-    croppedStream
-        .getTracks()
-        .forEach((track) => pc.addTrack(track, croppedStream));
+    releaseOutputTrack(sessionId, tabId);
+    const track = createCanvasTrackClone(sessionId);
+    if (!track) {
+        console.error(
+            `[OFFSCREEN] Cannot setup per-output PC for ${sessionId}/${tabId}: failed to clone canvas track`,
+        );
+        pcByOutput.delete(key);
+        try {
+            pc.close();
+        } catch {}
+        return;
+    }
+    const outStream = new MediaStream([track]);
+    const sender = pc.addTrack(track, outStream);
+    boostSenderForHighQuality(sender);
+    outputSenderTracks.set(key, track);
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
@@ -757,7 +884,35 @@ async function setupPeerConnectionForOutput(sessionId, tabId) {
     offerByOutput.set(key, offerPayload);
 }
 
+function stopRenderLoop(sessionId) {
+    if (!animationFrameIds.has(sessionId)) return;
+    const handle = animationFrameIds.get(sessionId);
+    if (handle?.interval) {
+        try {
+            clearInterval(handle.interval);
+        } catch {}
+    }
+    if (handle?.timeout) {
+        try {
+            clearTimeout(handle.timeout);
+        } catch {}
+    }
+    const video = handle?.video || videoElements.get(sessionId);
+    if (handle?.rvfc && video?.cancelVideoFrameCallback) {
+        try {
+            video.cancelVideoFrameCallback(handle.rvfc);
+        } catch {}
+    }
+    animationFrameIds.delete(sessionId);
+    console.log(`[OFFSCREEN] Render loop stopped for session: ${sessionId}`);
+}
+
 function startRenderLoop(sessionId) {
+    if (animationFrameIds.has(sessionId)) return;
+    const tabs = activeOutputTabs.get(sessionId);
+    if (!tabs || tabs.size === 0) {
+        return;
+    }
     const video = videoElements.get(sessionId);
     const ctx = canvasContexts.get(sessionId);
 
@@ -774,13 +929,6 @@ function startRenderLoop(sessionId) {
     const canvas = ctx.canvas;
     let firstDrawLogged = false;
     let frameCount = 0;
-
-    if (animationFrameIds.has(sessionId)) {
-        const prev = animationFrameIds.get(sessionId);
-        try {
-            clearInterval(prev);
-        } catch {}
-    }
 
     const drawOnce = () => {
         const vw = video.videoWidth || 0;
@@ -837,9 +985,31 @@ function startRenderLoop(sessionId) {
     };
 
     drawOnce();
-    const id = setInterval(drawOnce, 33);
-    animationFrameIds.set(sessionId, id);
-    console.log("[OFFSCREEN] Using setInterval loop @30fps (forced)");
+    const handles = { interval: 0, rvfc: 0, video };
+    const startInterval = () => {
+        if (handles.interval) return;
+        handles.interval = setInterval(drawOnce, 33);
+    };
+    startInterval();
+    if (typeof video.requestVideoFrameCallback === "function") {
+        const step = () => {
+            drawOnce();
+            if (handles.interval) {
+                try {
+                    clearInterval(handles.interval);
+                } catch {}
+                handles.interval = 0;
+                console.log(
+                    "[OFFSCREEN] Switched render loop to requestVideoFrameCallback",
+                );
+            }
+            handles.rvfc = video.requestVideoFrameCallback(step);
+        };
+        handles.rvfc = video.requestVideoFrameCallback(step);
+    } else {
+        console.log("[OFFSCREEN] Falling back to setInterval render loop");
+    }
+    animationFrameIds.set(sessionId, handles);
 
     setTimeout(() => {
         if (frameCount === 0) {
@@ -876,6 +1046,7 @@ function stopCapture(sessionId) {
         const pc = peerConnections.get(sessionId);
         if (pc) pc.close();
     } catch {}
+    releaseSessionTrack(sessionId);
     try {
         for (const [k, outPc] of pcByOutput.entries()) {
             if (k.startsWith(sessionId + ":")) {
@@ -886,6 +1057,10 @@ function stopCapture(sessionId) {
                 offerByOutput.delete(k);
                 pendingIceByOutput.delete(k);
                 offerIdByOutput.delete(k);
+                const [, tabIdStr] = k.split(":");
+                const tabIdVal =
+                    tabIdStr === "undefined" ? undefined : Number(tabIdStr);
+                releaseOutputTrack(sessionId, tabIdVal);
             }
         }
     } catch {}
@@ -907,14 +1082,25 @@ function stopCapture(sessionId) {
         } catch {}
     }
 
-    if (animationFrameIds.has(sessionId)) {
-        const id = animationFrameIds.get(sessionId);
+    stopRenderLoop(sessionId);
+
+    const ctx = canvasContexts.get(sessionId);
+    const canvas = ctx?.canvas;
+    if (canvas) {
         try {
-            clearInterval(id);
+            canvas.width = 0;
+            canvas.height = 0;
+            canvas.remove();
         } catch {}
+    }
+    canvasContexts.delete(sessionId);
+
+    const canvasStream = canvasStreams.get(sessionId);
+    if (canvasStream) {
         try {
-            cancelAnimationFrame(id);
+            canvasStream.getTracks()?.forEach((t) => stopTrack(t));
         } catch {}
+        canvasStreams.delete(sessionId);
     }
 
     [
@@ -922,7 +1108,6 @@ function stopCapture(sessionId) {
         pendingOffers,
         pendingOutputIce,
         videoElements,
-        canvasContexts,
         cropGeometries,
         animationFrameIds,
         srcDims,
@@ -934,6 +1119,8 @@ function stopCapture(sessionId) {
     try {
         if (shouldStopBase) originalStreams.delete(sessionId);
     } catch {}
+
+    activeOutputTabs.delete(sessionId);
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
@@ -949,4 +1136,6 @@ chrome.runtime.onMessage.addListener((msg) => {
     offerByOutput.delete(k);
     pendingIceByOutput.delete(k);
     offerIdByOutput.delete(k);
+    releaseOutputTrack(sessionId, tabId);
+    markOutputInactive(sessionId, tabId);
 });
