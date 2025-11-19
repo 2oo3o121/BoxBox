@@ -194,30 +194,110 @@
             }
         }
 
-        async function loadAllGeoms() {
-            try {
-                const res = await chrome.storage.local.get(GEOM_KEY);
-                return res?.[GEOM_KEY] || {};
-            } catch {
-                return {};
-            }
+        const geomCache = new Map();
+        const geomSaveTimers = new Map();
+        const pendingGeoms = new Map();
+        let geomLoadPromise = null;
+        let geomCacheLoaded = false;
+        let geomFlushListenersBound = false;
+        function ensureGeomCache() {
+            if (geomCacheLoaded) return Promise.resolve();
+            if (geomLoadPromise) return geomLoadPromise;
+            geomLoadPromise = chrome.storage.local
+                .get(GEOM_KEY)
+                .then((res) => {
+                    geomCache.clear();
+                    try {
+                        const map = res?.[GEOM_KEY] || {};
+                        for (const [key, value] of Object.entries(map)) {
+                            geomCache.set(key, value);
+                        }
+                    } catch {}
+                })
+                .catch(() => {})
+                .finally(() => {
+                    geomCacheLoaded = true;
+                    geomLoadPromise = null;
+                });
+            return geomLoadPromise;
         }
-        async function saveAllGeoms(map) {
+        function normalizeGeomInput(g) {
+            if (
+                !g ||
+                !Number.isFinite(g.x) ||
+                !Number.isFinite(g.y) ||
+                !Number.isFinite(g.width) ||
+                !Number.isFinite(g.height)
+            )
+                return null;
+            return {
+                x: Math.round(g.x),
+                y: Math.round(g.y),
+                width: Math.max(1, Math.round(g.width)),
+                height: Math.max(1, Math.round(g.height)),
+            };
+        }
+        async function flushGeomCacheForOverlay(overlayId, geom) {
+            await ensureGeomCache();
+            const next =
+                normalizeGeomInput(geom) ||
+                pendingGeoms.get(overlayId) ||
+                geomCache.get(overlayId);
+            if (next) geomCache.set(overlayId, next);
+            else geomCache.delete(overlayId);
+            const payload = Object.fromEntries(geomCache.entries());
             try {
-                await chrome.storage.local.set({ [GEOM_KEY]: map });
+                await chrome.storage.local.set({ [GEOM_KEY]: payload });
             } catch {}
         }
-        async function saveGeom(overlayId, geom) {
-            const all = await loadAllGeoms();
-            all[overlayId] = geom;
-            await saveAllGeoms(all);
+        function ensureGeomFlushListeners() {
+            if (geomFlushListenersBound) return;
+            const handler = () => flushAllScheduledGeoms(true);
+            window.addEventListener("mouseup", handler);
+            window.addEventListener("touchend", handler, { passive: true });
+            window.addEventListener("blur", handler);
+            geomFlushListenersBound = true;
+        }
+        function flushAllScheduledGeoms(immediate = false) {
+            if (!geomSaveTimers.size) return;
+            for (const [overlayId] of Array.from(geomSaveTimers.entries())) {
+                scheduleGeomSave(
+                    overlayId,
+                    pendingGeoms.get(overlayId),
+                    immediate,
+                );
+            }
+        }
+        function scheduleGeomSave(overlayId, geom, immediate = false) {
+            ensureGeomFlushListeners();
+            const normalized =
+                normalizeGeomInput(geom) ||
+                pendingGeoms.get(overlayId) ||
+                geomCache.get(overlayId);
+            if (normalized) pendingGeoms.set(overlayId, normalized);
+            else pendingGeoms.delete(overlayId);
+            const perform = () => {
+                geomSaveTimers.delete(overlayId);
+                const latest = pendingGeoms.get(overlayId);
+                pendingGeoms.delete(overlayId);
+                flushGeomCacheForOverlay(overlayId, latest);
+            };
+            clearTimeout(geomSaveTimers.get(overlayId));
+            if (immediate) {
+                perform();
+                return;
+            }
+            const id = setTimeout(perform, 100);
+            geomSaveTimers.set(overlayId, id);
         }
         async function deleteGeom(overlayId) {
-            const all = await loadAllGeoms();
-            if (overlayId in all) {
-                delete all[overlayId];
-                await saveAllGeoms(all);
+            const timer = geomSaveTimers.get(overlayId);
+            if (timer) {
+                clearTimeout(timer);
+                geomSaveTimers.delete(overlayId);
             }
+            pendingGeoms.delete(overlayId);
+            await flushGeomCacheForOverlay(overlayId, null);
         }
 
         const stateWriteQueue = new Map();
@@ -428,9 +508,9 @@
                 })
                 .catch(() => {});
 
-            loadAllGeoms()
-                .then((all) => {
-                    const g = all[overlayId];
+            ensureGeomCache()
+                .then(() => {
+                    const g = geomCache.get(overlayId);
                     if (g && Number.isFinite(g.x)) {
                         ov.setGeom(g.x, g.y, g.width, g.height);
                     }
@@ -438,7 +518,7 @@
                 .catch(() => {});
 
             ov.onGeomChanged = (geom) => {
-                saveGeom(overlayId, ov.getGeom());
+                scheduleGeomSave(overlayId, geom || ov.getGeom());
             };
 
             if (ov.getContentMode() === "none") {
@@ -507,9 +587,9 @@
 
                 if (kind === "source" && sessionId) {
                     try {
-                        loadAllGeoms()
-                            .then((all) => {
-                                const g = all[overlayId];
+                        ensureGeomCache()
+                            .then(() => {
+                                const g = geomCache.get(overlayId);
                                 if (g && Number.isFinite(g.x)) {
                                     ov.setGeom(g.x, g.y, g.width, g.height);
                                 }
@@ -574,7 +654,7 @@
                             });
                         }
                         ov.onGeomChanged = (geom) => {
-                            saveGeom(overlayId, ov.getGeom());
+                            scheduleGeomSave(overlayId, geom || ov.getGeom());
                             sendCrop();
                         };
                     }
