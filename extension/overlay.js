@@ -77,6 +77,12 @@ function initDragMouse(self, handleEl) {
     let startX, startY, startX0, startY0;
     let dragging = false,
         moved = false;
+    const currentGeom = () => ({
+        x: self.state.x,
+        y: self.state.y,
+        width: self.state.width,
+        height: self.state.height,
+    });
 
     const onMove = (e) => {
         if (!dragging) return;
@@ -96,6 +102,11 @@ function initDragMouse(self, handleEl) {
         );
 
         self.requestPaint();
+        if (typeof self.__onDragMove === "function") {
+            try {
+                self.__onDragMove({ event: e, geom: currentGeom() });
+            } catch {}
+        }
     };
 
     const endDrag = () => {
@@ -107,6 +118,11 @@ function initDragMouse(self, handleEl) {
         window.removeEventListener("mouseleave", onUp);
         restoreTextSelection();
         moved = false;
+        if (typeof self.__onDragEnd === "function") {
+            try {
+                self.__onDragEnd({ geom: currentGeom() });
+            } catch {}
+        }
     };
     const onUp = () => endDrag();
 
@@ -120,6 +136,11 @@ function initDragMouse(self, handleEl) {
         startY = e.clientY;
         startX0 = self.state.x;
         startY0 = self.state.y;
+        if (typeof self.__onDragStart === "function") {
+            try {
+                self.__onDragStart({ event: e, geom: currentGeom() });
+            } catch {}
+        }
         disableTextSelection();
         document.addEventListener("mousemove", onMove);
         document.addEventListener("mouseup", onUp);
@@ -295,6 +316,10 @@ export default class Overlay {
         this.fixed = false;
         this.pausedPoster = null;
         this.onPauseChanged = null;
+        this.__dock = null;
+        this.__shadowColor = "rgba(0,0,0,0.65)";
+        this.__shadowRgb = { r: 0, g: 0, b: 0 };
+        this.__syncDockingHooks();
     }
 
     // Sets overlay position and size, clamping into viewport bounds.
@@ -336,6 +361,7 @@ export default class Overlay {
     setKind(kind) {
         this.kind = kind;
         if (this.shadow) this.shadow.host.setAttribute("data-kind", this.kind);
+        this.__syncDockingHooks();
     }
 
     // Updates CSS custom properties used by the overlay skin.
@@ -344,6 +370,8 @@ export default class Overlay {
         const { shadowColor, radius, opacity } = t || {};
         const o = clamp01(opacity ?? 0.1);
         const sc = hexToRgb(shadowColor || getDefaultShadowColor());
+        this.__shadowRgb = sc;
+        this.__shadowColor = rgbStr(sc);
         const rad = clampInt(radius ?? 12, 0, 64);
         const style = this.shadow.getElementById("themeVars");
         const lines = [];
@@ -354,6 +382,7 @@ export default class Overlay {
         lines.push(`  --shadow-color: ${rgbStr(sc)};`);
         lines.push(`  --shadow: 0 0 14px ${rgbaStr(sc, 0.28)};`);
         lines.push(`  --radius: ${rad}px;`);
+        lines.push(`  --dock-highlight: ${rgbaStr(sc, 0.65)};`);
         if (this.kind === "source") {
             lines.push(`  --panel-bg: rgba(0,0,0,0);`);
         } else if (this.kind === "output") {
@@ -384,6 +413,9 @@ export default class Overlay {
     }
 
     remove() {
+        try {
+            this.__clearDockSlot();
+        } catch {}
         if (this.__ro) {
             try {
                 this.__ro.disconnect();
@@ -447,6 +479,7 @@ export default class Overlay {
           .resize-bl{left:0;bottom:0;cursor:nesw-resize}
           .resize-tr{right:0;top:0;cursor:nesw-resize}
           .resize-tl{left:0;top:0;cursor:nwse-resize}
+          .wrap.dock-hover .panel{box-shadow:0 0 0 3px var(--dock-highlight, rgba(124,58,237,0.65)),var(--shadow,0 0 10px rgba(0,0,0,.15))}
         `;
         shadow.appendChild(critical);
         const linkEl = document.createElement("link");
@@ -740,7 +773,8 @@ export default class Overlay {
                     const prevOnPause = this.onPauseChanged;
                     this.onPauseChanged = (state) => {
                         applyMidIcon(state?.paused ?? this.paused);
-                        if (typeof prevOnPause === "function") prevOnPause(state);
+                        if (typeof prevOnPause === "function")
+                            prevOnPause(state);
                     };
                     midBtn.addEventListener("click", (e) => {
                         e.stopPropagation();
@@ -842,6 +876,240 @@ export default class Overlay {
         this.state.height = targetH;
 
         this.requestPaint();
+    }
+
+    __syncDockingHooks() {
+        if (this.kind === "output") {
+            this.__enableDocking();
+        } else {
+            this.__disableDocking();
+        }
+    }
+
+    __resetSlotBorder(slotEl, dashed = false, dropDataset = true) {
+        if (!slotEl) return;
+        if (dashed) {
+            slotEl.style.borderStyle = "dashed";
+            slotEl.style.borderWidth = "2px";
+            slotEl.style.borderColor = "";
+        } else {
+            slotEl.style.borderStyle = "";
+            slotEl.style.borderWidth = "";
+            slotEl.style.borderColor = "";
+        }
+        if (dropDataset) {
+            try {
+                delete slotEl.dataset.peekDocked;
+            } catch {}
+        }
+    }
+
+    __slotHighlightColor(alpha = 0.65) {
+        const rgb = this.__shadowRgb || { r: 0, g: 0, b: 0 };
+        return rgbaStr(rgb, alpha);
+    }
+
+    __clearDockSlot(resetDashed = true) {
+        if (!this.__dock) return;
+        try {
+            if (this.__dock.slotObserver) this.__dock.slotObserver.disconnect();
+        } catch {}
+        if (this.__dock.slotEl && resetDashed) {
+            this.__resetSlotBorder(this.__dock.slotEl, true);
+        }
+        this.__dock.slotEl = null;
+        this.__dock.slotObserver = null;
+    }
+
+    __enableDocking() {
+        if (this.__dock?.enabled) return;
+        this.__dock = {
+            enabled: true,
+            active: false,
+            hovered: null,
+            slotEl: null,
+            slotObserver: null,
+        };
+        const getSlots = () => {
+            const board = document.getElementById("board");
+            if (!board) return [];
+            return Array.from(board.querySelectorAll(".slot"));
+        };
+        const clearHighlight = () => {
+            if (this.__dock?.hovered) {
+                try {
+                    this.__dock.hovered.classList.remove("highlight");
+                    this.__resetSlotBorder(this.__dock.hovered, true, false);
+                } catch {}
+            }
+            if (this.__dock) this.__dock.hovered = null;
+        };
+        const setHighlight = (slotEl) => {
+            if (this.__dock?.hovered === slotEl) return;
+            clearHighlight();
+            if (slotEl) {
+                try {
+                    slotEl.classList.add("highlight");
+                    slotEl.style.borderStyle = "solid";
+                    slotEl.style.borderWidth = "2px";
+                    slotEl.style.borderColor = this.__shadowColor;
+                } catch {}
+                if (this.__dock) this.__dock.hovered = slotEl;
+            }
+        };
+        const pickHoverSlot = (geom) => {
+            let g = geom || null;
+            if (!g && this.root) {
+                const r = this.root.getBoundingClientRect();
+                g = { x: r.left, y: r.top, width: r.width, height: r.height };
+            }
+            if (!g) g = this.getGeom();
+            if (!g) return null;
+            const gx0 = g.x;
+            const gy0 = g.y;
+            const gx1 = g.x + g.width;
+            const gy1 = g.y + g.height;
+            const myId = String(this.id || "");
+            let target = null;
+            let bestScore = 0;
+            for (const el of getSlots()) {
+                const r = el.getBoundingClientRect();
+                const docked = (el.dataset && el.dataset.peekDocked) || "";
+                if (docked && docked !== myId) continue; // slot already taken by another overlay
+                const inset = Math.min(
+                    Math.max(10, Math.min(r.width, r.height) * 0.16),
+                    Math.min(r.width, r.height) / 2,
+                );
+                const rx0 = r.left + inset;
+                const ry0 = r.top + inset;
+                const rx1 = r.right - inset;
+                const ry1 = r.bottom - inset;
+                const ix = Math.max(0, Math.min(gx1, rx1) - Math.max(gx0, rx0));
+                const iy = Math.max(0, Math.min(gy1, ry1) - Math.max(gy0, ry0));
+                const overlapArea = ix * iy;
+                if (overlapArea <= 0) continue;
+                const score = overlapArea;
+                if (score > bestScore) {
+                    bestScore = score;
+                    target = el;
+                }
+            }
+            return target;
+        };
+        this.__onDragStart = () => {
+            if (this.__dock) {
+                this.__dock.active = true;
+                this.__clearDockSlot();
+                try {
+                    this.shadow
+                        ?.querySelector(".wrap")
+                        ?.style.setProperty(
+                            "--dock-highlight",
+                            this.__slotHighlightColor(),
+                        );
+                } catch {}
+            }
+            try {
+                this.shadow
+                    ?.querySelector(".wrap")
+                    ?.classList.add("dock-hover");
+            } catch {}
+        };
+        this.__onDragMove = ({ geom }) => {
+            if (!this.__dock?.active) return;
+            const slotEl = pickHoverSlot(geom);
+            setHighlight(slotEl);
+        };
+        this.__onDragEnd = ({ geom }) => {
+            if (!this.__dock?.active) return;
+            if (this.__dock) this.__dock.active = false;
+            try {
+                this.shadow
+                    ?.querySelector(".wrap")
+                    ?.classList.remove("dock-hover");
+            } catch {}
+            const target = pickHoverSlot(geom);
+            clearHighlight();
+            if (target) this.__snapToSlot(target);
+            else this.__clearDockSlot();
+        };
+        this.__dock.clearDockSlot = () => this.__clearDockSlot();
+    }
+
+    __disableDocking() {
+        if (!this.__dock) return;
+        this.__clearDockSlot();
+        try {
+            if (this.__dock.hovered)
+                this.__dock.hovered.classList.remove("highlight");
+            this.shadow?.querySelector(".wrap")?.classList.remove("dock-hover");
+        } catch {}
+        this.__dock = { enabled: false, active: false, hovered: null };
+        this.__onDragStart = null;
+        this.__onDragMove = null;
+        this.__onDragEnd = null;
+    }
+
+    __snapToSlot(slotEl) {
+        if (!slotEl || typeof slotEl.getBoundingClientRect !== "function")
+            return;
+        if (this.__dock?.slotEl && this.__dock.slotEl !== slotEl) {
+            try {
+                this.__dock.slotObserver?.disconnect();
+            } catch {}
+            try {
+                this.__dock.slotEl.style.border = "";
+                this.__dock.slotEl.style.borderStyle = "";
+                this.__dock.slotEl.style.borderColor = "";
+                this.__dock.slotEl.style.borderWidth = "";
+                delete this.__dock.slotEl.dataset.peekDocked;
+            } catch {}
+            if (this.__dock) {
+                this.__dock.slotEl = null;
+                this.__dock.slotObserver = null;
+            }
+        }
+        const r = slotEl.getBoundingClientRect();
+        const targetW = Math.max(1, Math.round(r.width));
+        const targetH = Math.max(1, Math.round(r.height));
+        let newW = targetW;
+        let newH = targetH;
+        if (typeof this.aspectLock === "number" && isFinite(this.aspectLock)) {
+            const ar = Math.max(0.01, this.aspectLock);
+            const slotAr = targetW / Math.max(1, targetH);
+            if (slotAr > ar) {
+                newH = targetH;
+                newW = Math.round(targetH * ar);
+            } else {
+                newW = targetW;
+                newH = Math.round(targetW / ar);
+            }
+        }
+        const gx = r.left + (r.width - newW) / 2;
+        const gy = r.top + (r.height - newH) / 2;
+        this.setGeom(gx, gy, newW, newH);
+
+        const color = this.__shadowColor || "rgba(0,0,0,0.65)";
+        try {
+            slotEl.style.borderStyle = "solid";
+            slotEl.style.borderColor = color;
+            slotEl.style.borderWidth = "2px";
+            slotEl.dataset.peekDocked = this.id || "1";
+        } catch {}
+        try {
+            if (this.__dock) {
+                this.__dock.slotEl = slotEl;
+                this.__dock.slotObserver?.disconnect();
+                const ro = new ResizeObserver(() => {
+                    if (this.__dock?.active) return;
+                    try {
+                        this.__snapToSlot(slotEl);
+                    } catch {}
+                });
+                this.__dock.slotObserver = ro;
+                ro.observe(slotEl);
+            }
+        } catch {}
     }
 
     getContentMode() {
@@ -1038,6 +1306,9 @@ export default class Overlay {
         this.media.mode = "none";
         this.media.currentSrc = null;
         this.media.crop = null;
+        try {
+            this.__clearDockSlot();
+        } catch {}
     }
 
     async __capturePausedPoster() {

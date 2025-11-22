@@ -295,12 +295,7 @@
                 }
 
                 const storedTheme = localStorage.getItem("boxboard-theme");
-                const initialTheme =
-                    storedTheme ||
-                    (window.matchMedia &&
-                    window.matchMedia("(prefers-color-scheme: dark)").matches
-                        ? "dark"
-                        : "light");
+                const initialTheme = storedTheme || "dark";
                 applyTheme(initialTheme);
 
                 themeToggle.addEventListener("click", () => {
@@ -310,6 +305,15 @@
                 });
 
                 // Layout state
+                const LAYOUT_KEY = "boxboard-layout";
+                const allowedLayouts = new Set([
+                    "1x1",
+                    "1x2",
+                    "1x3",
+                    "2x1",
+                    "3x1",
+                    "2x2",
+                ]);
                 let currentLayout = "1x2";
                 let colPercents = [50, 50]; // Meaning varies by layout
                 let rowPercents = [50, 50]; // Used in 2x2, 2x1, 3x1, etc.
@@ -344,8 +348,12 @@
                 });
 
                 function setLayout(layout) {
+                    if (!allowedLayouts.has(layout)) layout = "1x2";
                     currentLayout = layout;
                     setActiveButton(layout);
+                    try {
+                        localStorage.setItem(LAYOUT_KEY, layout);
+                    } catch {}
 
                     if (layout === "1x1") {
                         colPercents = [100];
@@ -636,8 +644,12 @@
                     }
                 }
 
-                // Default layout
-                setLayout("1x2");
+                // Default layout (with persisted fallback)
+                const storedLayout = localStorage.getItem(LAYOUT_KEY);
+                const initialLayout = allowedLayouts.has(storedLayout)
+                    ? storedLayout
+                    : "1x2";
+                setLayout(initialLayout);
             })();
         </script>
     </body>
