@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Boxboard</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+
+            html,
+            body {
+                height: 100%;
+            }
+
+            :root {
+                --bg-color: #f5f1e8;
+                --fg-color: #333333;
+                --board-bg: #faf7f1;
+                --board-shadow-outer: 0 0 0 1px rgba(255, 255, 255, 0.7),
+                    0 14px 30px rgba(0, 0, 0, 0.08);
+                --slot-border: 2px dashed rgba(0, 0, 0, 0.22);
+                --slot-bg: linear-gradient(
+                    135deg,
+                    rgba(255, 255, 255, 0.85),
+                    rgba(250, 247, 241, 0.95)
+                );
+                --slot-inner-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.9);
+                --divider-color: rgba(0, 0, 0, 0.18);
+                --divider-color-hover: rgba(0, 0, 0, 0.35);
+                --slot-highlight-border: rgba(0, 0, 0, 0.55);
+                --slot-highlight-bg: linear-gradient(
+                    135deg,
+                    rgba(255, 255, 255, 0.97),
+                    rgba(250, 247, 241, 1)
+                );
+                --header-chip-bg: rgba(0, 0, 0, 0.03);
+                --toggle-active-bg: rgba(0, 0, 0, 0.14);
+                --toggle-hover-bg: rgba(0, 0, 0, 0.06);
+            }
+
+            :root[data-theme="dark"] {
+                --bg-color: #111217;
+                --fg-color: #e5e5f0;
+                --board-bg: #181a21;
+                --board-shadow-outer: 0 0 0 1px rgba(255, 255, 255, 0.04),
+                    0 18px 40px rgba(0, 0, 0, 0.85);
+                --slot-border: 2px dashed rgba(255, 255, 255, 0.18);
+                --slot-bg: linear-gradient(
+                    135deg,
+                    rgba(32, 34, 44, 0.95),
+                    rgba(23, 24, 33, 0.98)
+                );
+                --slot-inner-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+                --divider-color: rgba(255, 255, 255, 0.2);
+                --divider-color-hover: rgba(255, 255, 255, 0.45);
+                --slot-highlight-border: rgba(255, 255, 255, 0.65);
+                --slot-highlight-bg: linear-gradient(
+                    135deg,
+                    rgba(40, 42, 56, 0.98),
+                    rgba(28, 30, 42, 1)
+                );
+                --header-chip-bg: rgba(255, 255, 255, 0.04);
+                --toggle-active-bg: rgba(255, 255, 255, 0.14);
+                --toggle-hover-bg: rgba(255, 255, 255, 0.08);
+            }
+
+            body {
+                font-family: system-ui, -apple-system, BlinkMacSystemFont,
+                    "Segoe UI", sans-serif;
+                background: var(--bg-color);
+                color: var(--fg-color);
+            }
+
+            .page {
+                width: 100vw;
+                height: 100vh;
+                padding: 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            }
+
+            .header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 12px;
+                font-size: 14px;
+                opacity: 0.9;
+            }
+
+            .header-left {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .header-title {
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+                font-size: 13px;
+                opacity: 0.75;
+            }
+
+            .layout-toggle {
+                display: inline-flex;
+                gap: 4px;
+                background: var(--header-chip-bg);
+                padding: 4px;
+                border-radius: 999px;
+            }
+
+            .layout-toggle button {
+                border: none;
+                outline: none;
+                padding: 4px 10px;
+                border-radius: 999px;
+                font-size: 12px;
+                background: transparent;
+                cursor: pointer;
+                opacity: 0.6;
+                transition: background 0.15s ease, opacity 0.15s ease;
+                white-space: nowrap;
+                color: inherit;
+            }
+
+            .layout-toggle button:hover {
+                background: var(--toggle-hover-bg);
+                opacity: 0.9;
+            }
+
+            .layout-toggle button.active {
+                background: var(--toggle-active-bg);
+                opacity: 1;
+            }
+
+            .theme-toggle {
+                border: none;
+                outline: none;
+                padding: 4px 10px;
+                border-radius: 999px;
+                font-size: 12px;
+                background: var(--header-chip-bg);
+                cursor: pointer;
+                opacity: 0.8;
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                transition: background 0.15s ease, opacity 0.15s ease,
+                    transform 0.1s ease;
+                color: inherit;
+            }
+
+            .theme-toggle:hover {
+                background: var(--toggle-hover-bg);
+                opacity: 1;
+                transform: translateY(-0.5px);
+            }
+
+            .board-wrapper {
+                flex: 1;
+                border-radius: 16px;
+                padding: 16px;
+                background: var(--board-bg);
+                box-shadow: var(--board-shadow-outer);
+                overflow: hidden;
+            }
+
+            /* Main board container */
+            #board {
+                width: 100%;
+                height: 100%;
+                display: grid;
+            }
+
+            .slot {
+                position: relative;
+                border-radius: 16px;
+                border: var(--slot-border);
+                background: var(--slot-bg);
+                box-shadow: var(--slot-inner-shadow);
+                overflow: hidden;
+            }
+
+            .slot.highlight {
+                border-style: solid;
+                border-color: var(--slot-highlight-border);
+                background: var(--slot-highlight-bg);
+            }
+
+            /* Common divider styles */
+            .divider {
+                position: relative;
+                z-index: 2;
+            }
+
+            .divider.v-divider {
+                cursor: col-resize;
+            }
+
+            .divider.h-divider {
+                cursor: row-resize;
+            }
+
+            .divider.v-divider::before,
+            .divider.h-divider::before {
+                content: "";
+                position: absolute;
+                border-radius: 999px;
+                background: var(--divider-color);
+                transition: background 0.12s ease;
+            }
+
+            .divider.v-divider::before {
+                top: 8px;
+                bottom: 8px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 2px;
+            }
+
+            .divider.h-divider::before {
+                left: 8px;
+                right: 8px;
+                top: 50%;
+                transform: translateY(-50%);
+                height: 2px;
+            }
+
+            .divider:hover::before {
+                background: var(--divider-color-hover);
+            }
+
+            /* For Adsense later */
+            .ad-spacer {
+                height: 80px;
+                flex-shrink: 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="page">
+            <div class="header">
+                <div class="header-left">
+                    <div class="header-title">Boxboard</div>
+                    <div class="layout-toggle">
+                        <button data-layout="1x1">1 × 1</button>
+                        <button data-layout="1x2">1 × 2</button>
+                        <button data-layout="1x3">1 × 3</button>
+                        <button data-layout="2x1">2 × 1</button>
+                        <button data-layout="3x1">3 × 1</button>
+                        <button data-layout="2x2">2 × 2</button>
+                    </div>
+                </div>
+                <button class="theme-toggle" id="theme-toggle" type="button">
+                    <span id="theme-icon">🌞</span>
+                    <span id="theme-label">Light</span>
+                </button>
+            </div>
+
+            <div class="board-wrapper">
+                <div id="board"></div>
+            </div>
+
+            <!-- For Adsense later -->
+            <div class="ad-spacer"></div>
+        </div>
+
+        <script>
+            (function () {
+                const board = document.getElementById("board");
+                const layoutButtons = document.querySelectorAll(
+                    ".layout-toggle button",
+                );
+                const root = document.documentElement;
+                const themeToggle = document.getElementById("theme-toggle");
+                const themeIcon = document.getElementById("theme-icon");
+                const themeLabel = document.getElementById("theme-label");
+
+                // Theme
+                function applyTheme(theme) {
+                    root.dataset.theme = theme;
+                    localStorage.setItem("boxboard-theme", theme);
+                    if (theme === "dark") {
+                        themeIcon.textContent = "🌙";
+                        themeLabel.textContent = "Dark";
+                    } else {
+                        themeIcon.textContent = "🌞";
+                        themeLabel.textContent = "Light";
+                    }
+                }
+
+                const storedTheme = localStorage.getItem("boxboard-theme");
+                const initialTheme =
+                    storedTheme ||
+                    (window.matchMedia &&
+                    window.matchMedia("(prefers-color-scheme: dark)").matches
+                        ? "dark"
+                        : "light");
+                applyTheme(initialTheme);
+
+                themeToggle.addEventListener("click", () => {
+                    const newTheme =
+                        root.dataset.theme === "dark" ? "light" : "dark";
+                    applyTheme(newTheme);
+                });
+
+                // Layout state
+                let currentLayout = "1x2";
+                let colPercents = [50, 50]; // Meaning varies by layout
+                let rowPercents = [50, 50]; // Used in 2x2, 2x1, 3x1, etc.
+
+                // Drag state
+                const dragState = {
+                    active: false,
+                    type: null, // 'v' | 'h'
+                    index: null, // divider index/ID
+                    startX: 0,
+                    startY: 0,
+                    startCols: null,
+                    startRows: null,
+                    boardWidth: 0,
+                    boardHeight: 0,
+                };
+
+                function setActiveButton(layout) {
+                    layoutButtons.forEach((btn) => {
+                        btn.classList.toggle(
+                            "active",
+                            btn.dataset.layout === layout,
+                        );
+                    });
+                }
+
+                layoutButtons.forEach((btn) => {
+                    btn.addEventListener("click", () => {
+                        const layout = btn.dataset.layout;
+                        setLayout(layout);
+                    });
+                });
+
+                function setLayout(layout) {
+                    currentLayout = layout;
+                    setActiveButton(layout);
+
+                    if (layout === "1x1") {
+                        colPercents = [100];
+                        rowPercents = [100];
+                        render1x1();
+                    } else if (layout === "1x2") {
+                        colPercents = [50, 50];
+                        rowPercents = [100];
+                        render1x2();
+                    } else if (layout === "1x3") {
+                        colPercents = [33.3, 33.4, 33.3];
+                        rowPercents = [100];
+                        render1x3();
+                    } else if (layout === "2x1") {
+                        rowPercents = [50, 50];
+                        colPercents = [100];
+                        render2x1();
+                    } else if (layout === "3x1") {
+                        rowPercents = [33.3, 33.4, 33.3];
+                        colPercents = [100];
+                        render3x1();
+                    } else if (layout === "2x2") {
+                        colPercents = [50, 50];
+                        rowPercents = [50, 50];
+                        render2x2();
+                    }
+                }
+
+                // Layout rendering
+
+                function render1x1() {
+                    board.innerHTML = `
+          <div class="slot" data-slot-id="slot-main"></div>
+        `;
+                    board.style.gridTemplateColumns = "1fr";
+                    board.style.gridTemplateRows = "1fr";
+                }
+
+                function render1x2() {
+                    board.innerHTML = `
+          <div class="slot" data-slot-id="slot-left"></div>
+          <div class="divider v-divider" data-divider="0"></div>
+          <div class="slot" data-slot-id="slot-right"></div>
+        `;
+                    applyCols1x2();
+                    board.style.gridTemplateRows = "1fr";
+                    attachVerticalDividerHandlers();
+                }
+
+                function render1x3() {
+                    board.innerHTML = `
+          <div class="slot" data-slot-id="slot-left"></div>
+          <div class="divider v-divider" data-divider="0"></div>
+          <div class="slot" data-slot-id="slot-middle"></div>
+          <div class="divider v-divider" data-divider="1"></div>
+          <div class="slot" data-slot-id="slot-right"></div>
+        `;
+                    applyCols1x3();
+                    board.style.gridTemplateRows = "1fr";
+                    attachVerticalDividerHandlers();
+                }
+
+                function render2x1() {
+                    board.innerHTML = `
+          <div class="slot" data-slot-id="slot-top"></div>
+          <div class="divider h-divider" data-divider="0"></div>
+          <div class="slot" data-slot-id="slot-bottom"></div>
+        `;
+                    applyRows2x1();
+                    board.style.gridTemplateColumns = "1fr";
+                    attachHorizontalDividerHandlers();
+                }
+
+                function render3x1() {
+                    board.innerHTML = `
+          <div class="slot" data-slot-id="slot-top"></div>
+          <div class="divider h-divider" data-divider="0"></div>
+          <div class="slot" data-slot-id="slot-middle"></div>
+          <div class="divider h-divider" data-divider="1"></div>
+          <div class="slot" data-slot-id="slot-bottom"></div>
+        `;
+                    applyRows3x1();
+                    board.style.gridTemplateColumns = "1fr";
+                    attachHorizontalDividerHandlers();
+                }
+
+                function render2x2() {
+                    board.innerHTML = `
+          <div class="slot" data-slot-id="slot-tl" style="grid-column:1;grid-row:1;"></div>
+          <div class="slot" data-slot-id="slot-tr" style="grid-column:3;grid-row:1;"></div>
+          <div class="slot" data-slot-id="slot-bl" style="grid-column:1;grid-row:3;"></div>
+          <div class="slot" data-slot-id="slot-br" style="grid-column:3;grid-row:3;"></div>
+
+          <div class="divider v-divider" data-divider="v-main" style="grid-column:2;grid-row:1 / span 3;"></div>
+          <div class="divider h-divider" data-divider="h-main" style="grid-column:1 / span 3;grid-row:2;"></div>
+        `;
+                    applyCols2x2();
+                    applyRows2x2();
+                    attachVerticalDividerHandlers();
+                    attachHorizontalDividerHandlers();
+                }
+
+                // gridTemplete
+
+                function applyCols1x2() {
+                    const [c0, c1] = colPercents;
+                    board.style.gridTemplateColumns = `${c0}% 6px ${c1}%`;
+                }
+
+                function applyCols1x3() {
+                    const [c0, c1, c2] = colPercents;
+                    board.style.gridTemplateColumns = `${c0}% 6px ${c1}% 6px ${c2}%`;
+                }
+
+                function applyCols2x2() {
+                    const [c0, c1] = colPercents;
+                    board.style.gridTemplateColumns = `${c0}% 6px ${c1}%`;
+                }
+
+                function applyRows2x1() {
+                    const [r0, r1] = rowPercents;
+                    board.style.gridTemplateRows = `${r0}% 6px ${r1}%`;
+                }
+
+                function applyRows3x1() {
+                    const [r0, r1, r2] = rowPercents;
+                    board.style.gridTemplateRows = `${r0}% 6px ${r1}% 6px ${r2}%`;
+                }
+
+                function applyRows2x2() {
+                    const [r0, r1] = rowPercents;
+                    board.style.gridTemplateRows = `${r0}% 6px ${r1}%`;
+                }
+
+                // Divider handlers
+
+                function attachVerticalDividerHandlers() {
+                    const vDivs = board.querySelectorAll(".v-divider");
+                    vDivs.forEach((div) => {
+                        div.addEventListener("mousedown", (e) => {
+                            e.preventDefault();
+                            startVerticalDrag(div, e);
+                        });
+                    });
+                }
+
+                function attachHorizontalDividerHandlers() {
+                    const hDivs = board.querySelectorAll(".h-divider");
+                    hDivs.forEach((div) => {
+                        div.addEventListener("mousedown", (e) => {
+                            e.preventDefault();
+                            startHorizontalDrag(div, e);
+                        });
+                    });
+                }
+
+                // Drag start
+
+                function startVerticalDrag(div, event) {
+                    const rect = board.getBoundingClientRect();
+                    dragState.active = true;
+                    dragState.type = "v";
+                    dragState.index = div.dataset.divider;
+                    dragState.startX = event.clientX;
+                    dragState.startCols = [...colPercents];
+                    dragState.boardWidth = rect.width;
+
+                    document.body.style.userSelect = "none";
+                    document.body.style.cursor = "col-resize";
+                }
+
+                function startHorizontalDrag(div, event) {
+                    const rect = board.getBoundingClientRect();
+                    dragState.active = true;
+                    dragState.type = "h";
+                    dragState.index = div.dataset.divider;
+                    dragState.startY = event.clientY;
+                    dragState.startRows = [...rowPercents];
+                    dragState.boardHeight = rect.height;
+
+                    document.body.style.userSelect = "none";
+                    document.body.style.cursor = "row-resize";
+                }
+
+                // Drag progress/end
+
+                window.addEventListener("mousemove", (e) => {
+                    if (!dragState.active) return;
+                    if (dragState.type === "v") {
+                        handleVerticalDrag(e);
+                    } else if (dragState.type === "h") {
+                        handleHorizontalDrag(e);
+                    }
+                });
+
+                window.addEventListener("mouseup", () => {
+                    if (!dragState.active) return;
+                    dragState.active = false;
+                    dragState.type = null;
+                    dragState.index = null;
+                    document.body.style.userSelect = "";
+                    document.body.style.cursor = "";
+                });
+
+                function clamp(val, min, max) {
+                    return Math.min(max, Math.max(min, val));
+                }
+
+                function handleVerticalDrag(e) {
+                    const dx = e.clientX - dragState.startX;
+                    const boardWidth = dragState.boardWidth || 1;
+                    const deltaPct = (dx / boardWidth) * 100;
+                    const minPct = 10; // Each section minimum 10%
+
+                    if (currentLayout === "1x2") {
+                        const [startLeft, startRight] = dragState.startCols;
+                        let newLeft = startLeft + deltaPct;
+                        newLeft = clamp(newLeft, minPct, 100 - minPct);
+                        const newRight = 100 - newLeft;
+                        colPercents = [newLeft, newRight];
+                        applyCols1x2();
+                    } else if (currentLayout === "1x3") {
+                        const [s0, s1, s2] = dragState.startCols;
+                        const idx = parseInt(dragState.index, 10);
+                        if (idx === 0) {
+                            const pairTotal = s0 + s1;
+                            let newLeft = s0 + deltaPct;
+                            newLeft = clamp(
+                                newLeft,
+                                minPct,
+                                pairTotal - minPct,
+                            );
+                            const newMid = pairTotal - newLeft;
+                            colPercents = [newLeft, newMid, s2];
+                        } else if (idx === 1) {
+                            const pairTotal = s1 + s2;
+                            let newMid = s1 + deltaPct;
+                            newMid = clamp(newMid, minPct, pairTotal - minPct);
+                            const newRight = pairTotal - newMid;
+                            colPercents = [s0, newMid, newRight];
+                        }
+                        applyCols1x3();
+                    } else if (currentLayout === "2x2") {
+                        const [startLeft, startRight] = dragState.startCols;
+                        let newLeft = startLeft + deltaPct;
+                        newLeft = clamp(newLeft, minPct, 100 - minPct);
+                        const newRight = 100 - newLeft;
+                        colPercents = [newLeft, newRight];
+                        applyCols2x2();
+                    }
+                }
+
+                function handleHorizontalDrag(e) {
+                    const dy = e.clientY - dragState.startY;
+                    const boardHeight = dragState.boardHeight || 1;
+                    const deltaPct = (dy / boardHeight) * 100;
+                    const minPct = 10; // Each section minimum 10%
+
+                    if (currentLayout === "2x1" || currentLayout === "2x2") {
+                        const [startTop, startBottom] = dragState.startRows;
+                        let newTop = startTop + deltaPct;
+                        newTop = clamp(newTop, minPct, 100 - minPct);
+                        const newBottom = 100 - newTop;
+                        rowPercents = [newTop, newBottom];
+
+                        if (currentLayout === "2x1") {
+                            applyRows2x1();
+                        } else {
+                            applyRows2x2();
+                        }
+                    } else if (currentLayout === "3x1") {
+                        const [s0, s1, s2] = dragState.startRows;
+                        const idx = parseInt(dragState.index, 10);
+                        if (idx === 0) {
+                            const pairTotal = s0 + s1;
+                            let newTop = s0 + deltaPct;
+                            newTop = clamp(newTop, minPct, pairTotal - minPct);
+                            const newMid = pairTotal - newTop;
+                            rowPercents = [newTop, newMid, s2];
+                        } else if (idx === 1) {
+                            const pairTotal = s1 + s2;
+                            let newMid = s1 + deltaPct;
+                            newMid = clamp(newMid, minPct, pairTotal - minPct);
+                            const newBottom = pairTotal - newMid;
+                            rowPercents = [s0, newMid, newBottom];
+                        }
+                        applyRows3x1();
+                    }
+                }
+
+                // Default layout
+                setLayout("1x2");
+            })();
+        </script>
+    </body>
+</html>
